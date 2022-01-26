@@ -10,8 +10,7 @@ use thiserror::Error;
 
 use crate::feed::Rss;
 
-const RESP_SIZE_LIMIT: usize = 2 * 1024 * 1024;
-
+static RESP_SIZE_LIMIT: OnceCell<u64> = OnceCell::new();
 static CLIENT: OnceCell<reqwest::Client> = OnceCell::new();
 
 #[derive(Error, Debug)]
@@ -21,17 +20,17 @@ pub enum FeedError {
     #[error("feed parsing failed")]
     Parsing(#[from] quick_xml::Error),
     #[error("feed is too large")]
-    TooLarge,
+    TooLarge(u64),
 }
 
 impl FeedError {
     pub fn to_user_friendly(&self) -> String {
         match self {
-            Self::Network(source) => format!("网络错误（{}）", source),
-            Self::Parsing(source) => format!("解析错误（{}）", source),
-            Self::TooLarge => format!(
-                "RSS 超出大小限制（{}）",
-                format_byte_size(RESP_SIZE_LIMIT as u64)
+            Self::Network(source) => tr!("network_error", source = source),
+            Self::Parsing(source) => tr!("parsing_error", source = source),
+            Self::TooLarge(limit) => tr!(
+                "rss_size_limit_exceeded",
+                size = format_byte_size((*limit).into())
             ),
         }
     }
@@ -45,9 +44,13 @@ pub async fn pull_feed(url: &str) -> Result<Rss, FeedError> {
         .send()
         .await?
         .error_for_status()?;
+    let size_limit = *RESP_SIZE_LIMIT
+        .get()
+        .expect("RESP_SIZE_LIMIT not initialized");
+    let unlimited = size_limit == 0;
     if let Some(len) = resp.content_length() {
-        if len > RESP_SIZE_LIMIT as u64 {
-            return Err(FeedError::TooLarge);
+        if !unlimited && len > size_limit {
+            return Err(FeedError::TooLarge(size_limit));
         }
     }
 
@@ -60,8 +63,8 @@ pub async fn pull_feed(url: &str) -> Result<Rss, FeedError> {
     } else {
         let mut buf = Vec::new(); // TODO: capacity?
         while let Some(bytes) = resp.chunk().await? {
-            if buf.len() + bytes.len() > RESP_SIZE_LIMIT {
-                return Err(FeedError::TooLarge);
+            if !unlimited && buf.len() + bytes.len() > size_limit as usize {
+                return Err(FeedError::TooLarge(size_limit));
             }
             buf.extend_from_slice(&bytes);
         }
@@ -72,7 +75,7 @@ pub async fn pull_feed(url: &str) -> Result<Rss, FeedError> {
     Ok(crate::feed::fix_relative_url(feed, url))
 }
 
-pub fn init_client(bot_name: &str, insecue: bool) {
+pub fn init_client(bot_name: &str, insecue: bool, max_feed_size: u64) {
     let mut headers = reqwest::header::HeaderMap::new();
     let ua = format!(
         concat!(
@@ -103,6 +106,9 @@ pub fn init_client(bot_name: &str, insecue: bool) {
     let client = client_builder.build().unwrap();
 
     CLIENT.set(client).expect("CLIENT already initialized");
+    RESP_SIZE_LIMIT
+        .set(max_feed_size)
+        .expect("RESP_SIZE_LIMIT already initialized");
 }
 
 fn content_type_is_json(value: &HeaderValue) -> bool {
@@ -117,7 +123,6 @@ fn content_type_is_json(value: &HeaderValue) -> bool {
         .unwrap_or(false)
 }
 
-// TODO: const fn?
 /// About the "kiB" not "KiB": https://en.wikipedia.org/wiki/Metric_prefix#List_of_SI_prefixes
 fn format_byte_size(bytes: u64) -> String {
     const SIZES: [&str; 7] = ["B", "kiB", "MiB", "GiB", "TiB", "PiB", "EiB"];

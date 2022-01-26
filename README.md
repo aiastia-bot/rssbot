@@ -2,7 +2,7 @@
 
 **Other Languages:** [English](README.en.md)
 
-中文 Telegram RSS 机器人 [@RustRssBot](http://t.me/RustRssBot)
+Telegram RSS 机器人 [@RustRssBot](http://t.me/RustRssBot)
 
 **支持:**
  - [x] RSS 0.9
@@ -25,7 +25,7 @@
 
 ## 下载
 
-可直接从 [Releases](https://github.com/iovxw/rssbot/releases) 下载预编译的程序, Linux 版本为 *musl* 静态链接, 无需其他依赖
+可直接从 [Releases](https://github.com/iovxw/rssbot/releases) 下载预编译的程序（带 `zh` 的为中文版）, Linux 版本为 *musl* 静态链接, 无需其他依赖
 
 ## 编译
 
@@ -46,17 +46,23 @@ USAGE:
     rssbot [FLAGS] [OPTIONS] <token>
 
 FLAGS:
-    -h, --help        Prints help information
-        --insecure    DANGER: Insecure mode, accept invalid TLS certificates
-    -V, --version     Prints version information
+    -h, --help          Prints help information
+        --insecure      DANGER: Insecure mode, accept invalid TLS certificates
+        --restricted    Make bot commands only accessible for group admins
+    -V, --version       Prints version information
 
 OPTIONS:
-    -d, --database <database>            Path to database [default: ./rssbot.json]
-        --max-interval <max-interval>    Maximum fetch interval, seconds [default: 43200]
-        --min-interval <min-interval>    Minimum fetch interval, seconds [default: 300]
+        --admin <user id>...        Private mode, only specified user can use this bot. This argument can be passed
+                                    multiple times to allow multiple admins
+    -d, --database <path>           Path to database [default: ./rssbot.json]
+        --max-feed-size <bytes>     Maximum feed size, 0 is unlimited [default: 2097152]
+        --max-interval <seconds>    Maximum fetch interval [default: 43200]
+        --min-interval <seconds>    Minimum fetch interval [default: 300]
 
 ARGS:
     <token>    Telegram bot token
+
+NOTE: You can get <user id> using bots like @userinfobot @getidsbot
 ```
 
 `<token>` 请参照 [这里](https://core.telegram.org/bots#3-how-do-i-create-a-bot) 申请

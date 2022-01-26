@@ -6,7 +6,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macOS-latest]
-        rust: [nightly-2020-03-20]
+        rust: [nightly]
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -16,3 +16,19 @@ jobs:
     - uses: actions/checkout@master
     - name: Run tests
       run: cargo test --verbose
+
+  test-locales:
+    strategy:
+      matrix:
+        locale: [zh, en]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: hecrj/setup-rust-action@v1
+      with:
+        rust-version: nightly
+    - uses: actions/checkout@master
+    - name: Check locales
+      env:
+        LOCALE: ${{ matrix.locale }}
+      run: cargo check --verbose

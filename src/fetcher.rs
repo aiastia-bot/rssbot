@@ -2,20 +2,18 @@ use std::cmp;
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 
 use futures::{future::FutureExt, select_biased};
-use tbot::{
-    types::parameters::{self, WebPagePreviewState},
-    Bot,
-};
+use tbot::{types::parameters, Bot};
 use tokio::{
     self,
-    stream::StreamExt,
-    sync::Notify,
-    time::{self, delay_for, delay_queue::DelayQueue, Duration, Instant},
+    sync::{Mutex, Notify},
+    time::{self, Duration, Instant},
 };
+use tokio_stream::StreamExt;
+use tokio_util::time::DelayQueue;
 
 use crate::client::pull_feed;
 use crate::data::{Database, Feed, FeedUpdate};
@@ -43,7 +41,7 @@ pub fn start(bot: Bot, db: Arc<Mutex<Database>>, min_interval: u32, max_interval
                     });
                 }
                 _ = interval.tick().fuse() => {
-                    let feeds = db.lock().unwrap().all_feeds();
+                    let feeds = db.lock().await.all_feeds();
                     for feed in feeds {
                         let feed_interval = cmp::min(
                             cmp::max(
@@ -68,29 +66,33 @@ async fn fetch_and_push_updates(
     let new_feed = match pull_feed(&feed.link).await {
         Ok(feed) => feed,
         Err(e) => {
-            let down_time = db.lock().unwrap().get_or_update_down_time(&feed.link);
+            let down_time = db.lock().await.get_or_update_down_time(&feed.link);
             if down_time.is_none() {
                 // user unsubscribed while fetching the feed
                 return Ok(());
             }
             // 5 days
             if down_time.unwrap().as_secs() > 5 * 24 * 60 * 60 {
-                db.lock().unwrap().reset_down_time(&feed.link);
-                let msg = format!(
-                    "《<a href=\"{}\">{}</a>》\
-                     已经连续 5 天拉取出错 ({}),\
-                     可能已经关闭, 请取消订阅",
-                    Escape(&feed.link),
-                    Escape(&feed.title),
-                    Escape(&e.to_user_friendly())
+                db.lock().await.reset_down_time(&feed.link);
+                let msg = tr!(
+                    "continuous_fetch_error",
+                    link = Escape(&feed.link),
+                    title = Escape(&feed.title),
+                    error = Escape(&e.to_user_friendly())
                 );
-                push_updates(&bot, &db, feed.subscribers, parameters::Text::html(&msg)).await?;
+                push_updates(
+                    &bot,
+                    &db,
+                    feed.subscribers,
+                    parameters::Text::with_html(&msg),
+                )
+                .await?;
             }
             return Ok(());
         }
     };
 
-    let updates = db.lock().unwrap().update(&feed.link, new_feed);
+    let updates = db.lock().await.update(&feed.link, new_feed);
     for update in updates {
         match update {
             FeedUpdate::Items(items) => {
@@ -113,23 +115,23 @@ async fn fetch_and_push_updates(
                         &bot,
                         &db,
                         feed.subscribers.iter().copied(),
-                        parameters::Text::html(&msg),
+                        parameters::Text::with_html(&msg),
                     )
                     .await?;
                 }
             }
             FeedUpdate::Title(new_title) => {
-                let msg = format!(
-                    "<a href=\"{}\">{}</a> 已更名为 {}",
-                    Escape(&feed.link),
-                    Escape(&feed.title),
-                    Escape(&new_title)
+                let msg = tr!(
+                    "feed_renamed",
+                    link = Escape(&feed.link),
+                    title = Escape(&feed.title),
+                    new_title = Escape(&new_title)
                 );
                 push_updates(
                     &bot,
                     &db,
                     feed.subscribers.iter().copied(),
-                    parameters::Text::html(&msg),
+                    parameters::Text::with_html(&msg),
                 )
                 .await?;
             }
@@ -142,29 +144,27 @@ async fn push_updates<I: IntoIterator<Item = i64>>(
     bot: &Bot,
     db: &Arc<Mutex<Database>>,
     subscribers: I,
-    msg: parameters::Text<'_>,
+    msg: parameters::Text,
 ) -> Result<(), tbot::errors::MethodCall> {
     use tbot::errors::MethodCall;
     for mut subscriber in subscribers {
         'retry: for _ in 0..3 {
             match bot
-                .send_message(tbot::types::chat::Id(subscriber), msg)
-                .web_page_preview(WebPagePreviewState::Disabled)
+                .send_message(tbot::types::chat::Id(subscriber), msg.clone())
+                .is_web_page_preview_disabled(true)
                 .call()
                 .await
             {
                 Err(MethodCall::RequestError { description, .. })
                     if chat_is_unavailable(&description) =>
                 {
-                    db.lock().unwrap().delete_subscriber(subscriber);
+                    db.lock().await.delete_subscriber(subscriber);
                 }
                 Err(MethodCall::RequestError {
                     migrate_to_chat_id: Some(new_chat_id),
                     ..
                 }) => {
-                    db.lock()
-                        .unwrap()
-                        .update_subscriber(subscriber, new_chat_id.0);
+                    db.lock().await.update_subscriber(subscriber, new_chat_id.0);
                     subscriber = new_chat_id.0;
                     continue 'retry;
                 }
@@ -172,7 +172,7 @@ async fn push_updates<I: IntoIterator<Item = i64>>(
                     retry_after: Some(delay),
                     ..
                 }) => {
-                    time::delay_for(Duration::from_secs(delay)).await;
+                    time::sleep(Duration::from_secs(delay)).await;
                     continue 'retry;
                 }
                 other => {
@@ -209,12 +209,12 @@ impl FetchQueue {
         if !exists {
             self.notifies.insert(feed.link.clone(), delay);
             self.feeds.insert(feed.link.clone(), feed);
-            self.wakeup.notify();
+            self.wakeup.notify_waiters();
         }
         !exists
     }
 
-    async fn next(&mut self) -> Result<Feed, time::Error> {
+    async fn next(&mut self) -> Result<Feed, time::error::Error> {
         loop {
             if let Some(feed_id) = self.notifies.next().await {
                 let feed = self.feeds.remove(feed_id?.get_ref()).unwrap();
@@ -255,7 +255,7 @@ struct Opportunity {
 
 impl Opportunity {
     async fn wait(&self) {
-        delay_for(Duration::from_secs(self.n as u64)).await
+        time::sleep(Duration::from_secs(self.n as u64)).await
     }
 }
 
