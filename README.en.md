@@ -42,6 +42,8 @@ The compiled files are available at: `./target/release/rssbot`
 ## Run
 
 ```
+A simple Telegram RSS bot.
+
 USAGE:
     rssbot [FLAGS] [OPTIONS] <token>
 
@@ -54,13 +56,14 @@ FLAGS:
 OPTIONS:
         --admin <user id>...        Private mode, only specified user can use this bot. This argument can be passed
                                     multiple times to allow multiple admins
+        --api-uri <tgapi-uri>       Custom telegram api URI [default: https://api.telegram.org/]
     -d, --database <path>           Path to database [default: ./rssbot.json]
         --max-feed-size <bytes>     Maximum feed size, 0 is unlimited [default: 2097152]
         --max-interval <seconds>    Maximum fetch interval [default: 43200]
         --min-interval <seconds>    Minimum fetch interval [default: 300]
 
 ARGS:
-    <token>    Telegram bot token
+    <token>    Telegram bot token [env: RSSBOT_TOKEN]
 
 NOTE: You can get <user id> using bots like @userinfobot @getidsbot
 ```
@@ -69,6 +72,7 @@ Please read the [official docs](https://core.telegram.org/bots#3-how-do-i-create
 
 ## Environment variables
 
+- `RSSBOT_TOKEN`: Telegram bot token
 - `HTTP_PROXY`: Proxy for HTTP
 - `HTTPS_PROXY`: Proxy for HTTPS
 - `RSSBOT_DONT_PROXY_FEEDS`: Set to `1` to limit the proxy to Telegram requests
